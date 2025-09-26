@@ -1,28 +1,48 @@
 #!/bin/bash
 
+set -euo pipefail
+trap 'echo "run_label.bash failed at line $LINENO"; exit 1' ERR
+
 # Hardcoded parameters (modify these values as needed)
-MODEL="llama-3.1-8b"
-INPUT_CSV="/path/to/your/input.csv"
-OUTPUT_DIR="/path/to/your/output"
-GT_DIR="/path/to/your/ground_truth"
-PROMPT_VERSION="5"
+MODEL="llama-3.1-8b-sft"
+BACKBONE="vllm"
+INPUT_REPORTS="../data/test_reports.csv"
+GEN_DIR="../results/labels/"
+GT_LABELS="../data/test_labels.csv"
+SKIP_INFERENCE="false"
 
 # Create output directory
-mkdir -p $OUTPUT_DIR
+mkdir -p "$GEN_DIR"
 
 # Step 1: Run inference
 echo "Starting inference process..."
-python ./processor/vLLM.py \
-  --model $MODEL \
-  --input_csv $INPUT_CSV \
-  --o $OUTPUT_DIR \
-  --prompt $PROMPT_VERSION
+if [ "$SKIP_INFERENCE" != "true" ]; then
+  echo "Running inference (SKIP_INFERENCE=$SKIP_INFERENCE)."
+  if [ "$BACKBONE" == "azure" ]; then
+    echo "Using Azure backbone."
+    python ./processor/AzureOpenAI.py \
+      --model_name $MODEL \
+      --input_csv "$INPUT_REPORTS" \
+      --o "$GEN_DIR"
+  elif [ "$BACKBONE" == "vllm" ]; then
+    echo "Using vLLM backbone."
+    python ./processor/vLLM.py \
+      --model_name $MODEL \
+      --input_csv "$INPUT_REPORTS" \
+      --o "$GEN_DIR"
+  else
+    echo "Unsupported backbone: $BACKBONE"
+    exit 1
+  fi
+else
+  echo "Skipping inference step (SKIP_INFERENCE=true)."
+fi
 
 # Step 2: Run evaluation
 echo "Starting evaluation process..."
 python ./processor/eval.py \
-  --gt_dir $GT_DIR \
-  --gen_dir $OUTPUT_DIR \
-  --prompt $PROMPT_VERSION
+  --gt_dir "$GT_LABELS" \
+  --gen_dir "$GEN_DIR" \
+  --model_name "$MODEL"
 
-echo "Process completed! Results saved to $OUTPUT_DIR"
+echo "Label extraction completed! Results saved to $GEN_DIR"

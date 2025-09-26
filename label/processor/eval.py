@@ -1,11 +1,14 @@
-import pandas as pd
-import numpy as np
-import json
-from sklearn.metrics import f1_score
-import re
 import ast
-import argparse
+import glob
+import json
 import os
+import argparse
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import f1_score
 
 # Computes negative F1 and negative F1-5 for the labels:
 # Edema, Consolidation, Pneumonia, Pneumothorax, Pleural Effusion.
@@ -110,13 +113,13 @@ def replace_values(value):
 if __name__ == '__main__':
     # Step 1: Prepare the input
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gt_file', type=str, help="Path to ground truth CSV file")
+    parser.add_argument('--gt_dir', type=str, help="Path to ground truth CSV file")
     parser.add_argument('--gen_dir', type=str, help="Directory containing generated result files")
-    parser.add_argument('--prompt', type=str, default='5', help="Prompt version to use (default: 5)")
+    parser.add_argument('--model_name', type=str, default=None, help="Model name whose labels should be evaluated")
     args = parser.parse_args()
-    gt_file = args.gt_file
-    gen_dir = args.gen_dir + '/'
-    prompt_version = args.prompt
+    gt_file = args.gt_dir
+    gen_dir = args.gen_dir 
+    label_dir = os.path.join(gen_dir, 'tmp')
 
     CXR_LABELS_1 = ['Enlarged Cardiomediastinum', 'Cardiomegaly',
         'Lung Opacity', 'Lung Lesion', 'Edema', 'Consolidation', 'Pneumonia',
@@ -124,8 +127,11 @@ if __name__ == '__main__':
         'Fracture', 'Support Devices'] ## exclude No Finding
 
     # Step 2: Load the data
-    print(f"Loading generated results from: {gen_dir+f'gt_results_{prompt_version}_cleaned.json'}")
-    with open(gen_dir+f'gt_results_{prompt_version}_cleaned.json') as f:
+    requested_filename = f'output_labels_{args.model_name}.json'
+    label_path = os.path.join(label_dir, requested_filename)
+
+    print(f"Loading generated results from: {label_path}")
+    with open(label_path) as f:
         dict_all = json.load(f)
     
     rows = []
@@ -182,14 +188,15 @@ if __name__ == '__main__':
         metrics[col + ' (neg)'] = label_neg_f1[CXR_LABELS_1.index(col)]
     
     df_metrics1 = pd.DataFrame(metrics, index=['model'])    
-    print(df_metrics1)
     
     # List all df_metrics in the terminal in a good format
     for col in df_metrics1.columns:
         print(f"{col}: {df_metrics1[col][0].round(4)}")
     
     # Save the DataFrame to a CSV file
-    df_metrics1.to_csv(gen_dir+'metrics.csv', index=False)
+    metrics_path = os.path.join(gen_dir, f'label_metrics_{args.model_name}.csv')
+    df_metrics1.to_csv(metrics_path, index=False)
+    print(f"Metrics saved to {metrics_path}")
 
     if len(dict_err) > 0:
         error_file = gen_dir + 'format_errors.json'

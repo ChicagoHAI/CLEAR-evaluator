@@ -1,0 +1,4 @@
+study_id,Atelectasis,Cardiomegaly,Consolidation,Edema,Enlarged Cardiomediastinum,Fracture,Lung Lesion,Lung Opacity,Pleural Effusion,Pleural Other,Pneumonia,Pneumothorax,Support Devices
+s50421811,-1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,-1
+s50438069,1,1,-1,1,-1,-1,-1,1,-1,-1,0,-1,-1
+s50549933,1,1,-1,0,1,-1,-1,1,1,-1,-1,0,1

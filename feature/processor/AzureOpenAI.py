@@ -119,7 +119,7 @@ class AzureProcessor:
             output_dict[id] = self.run_feature_extraction(report, label_row)
 
         # Step 3: Save json
-        output_path = os.path.join(self.out_dir, f"feature_output_{self.model}.json")
+        output_path = os.path.join(self.out_dir, f"output_feature_{self.model}.json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(output_dict, f, ensure_ascii=False, indent=4)
         print(f"Saved output to {output_path}")

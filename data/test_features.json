@@ -1,0 +1,89 @@
+{
+    "s50421811": {
+        "Edema": {
+            "First Occurrence": "[\"current\"]",
+            "Change": "[\"worsening\"]",
+            "Severity": "[\"mixed\"]",
+            "Descriptive Location": "[\"basal mild to moderate pulmonary edema\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Pleural Effusion": {
+            "First Occurrence": "[\"current\"]",
+            "Change": "[\"NaN\"]",
+            "Severity": "[\"mild\"]",
+            "Descriptive Location": "[\"small pleural effusions\"]",
+            "Recommendation": "[\"nan\"]"
+        }
+    },
+    "s50438069": {
+        "Atelectasis": {
+            "First Occurrence": "[\"previous\"]",
+            "Change": "[\"worsening\"]",
+            "Severity": "[\"NaN\"]",
+            "Descriptive Location": "[\"left lung bases atelectasis\", \"left hemidiaphragm\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Cardiomegaly": {
+            "First Occurrence": "[\"previous\"]",
+            "Change": "[\"stable\"]",
+            "Severity": "[\"moderate\"]",
+            "Descriptive Location": "[\"nan\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Edema": {
+            "First Occurrence": "[\"previous\"]",
+            "Change": "[\"stable\"]",
+            "Severity": "[\"NaN\"]",
+            "Descriptive Location": "[\"nan\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Lung Opacity": {
+            "First Occurrence": "[\"previous\"]",
+            "Change": "[\"worsening\"]",
+            "Severity": "[\"NaN\"]",
+            "Descriptive Location": "[\"left lung bases\", \"left hemidiaphragm\"]",
+            "Recommendation": "[\"nan\"]"
+        }
+    },
+    "s50549933": {
+        "Atelectasis": {
+            "First Occurrence": "[\"current\"]",
+            "Change": "[\"NaN\"]",
+            "Severity": "[\"NaN\"]",
+            "Descriptive Location": "[\"bilateral effusions associated with adjacent atelectasis, right greater than left\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Cardiomegaly": {
+            "First Occurrence": "[\"previous\"]",
+            "Change": "[\"stable\"]",
+            "Severity": "[\"NaN\"]",
+            "Descriptive Location": "[\"enlargement of the cardiac silhouette grossly unchanged\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Enlarged Cardiomediastinum": {
+            "First Occurrence": "[\"previous\"]",
+            "Change": "[\"stable\"]",
+            "Severity": "[\"NaN\"]",
+            "Descriptive Location": "[\"nan\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Lung Opacity": {
+            "First Occurrence": "[\"current\"]",
+            "Change": "[\"NaN\"]",
+            "Severity": "[\"NaN\"]",
+            "Descriptive Location": "[\"moderate bilateral effusions right greater than left are associated with adjacent atelectasis\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Pleural Effusion": {
+            "First Occurrence": "[\"current\"]",
+            "Change": "[\"NaN\"]",
+            "Severity": "[\"moderate\"]",
+            "Descriptive Location": "[\"moderate bilateral effusions right greater than left\"]",
+            "Recommendation": "[\"nan\"]"
+        },
+        "Support Devices": {
+            "Descriptive Location": "[\"sternal wires\"]",
+            "Recommendation": "[\"nan\"]"
+        }
+    }
+}
