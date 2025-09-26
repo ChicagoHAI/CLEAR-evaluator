@@ -58,10 +58,18 @@ The evaluator runs in two sequential modules. The table below captures what each
 | Input file | Reports CSV with `study_id` and `report`; evaluation expects ground-truth labels CSV with the 13 CLEAR condition columns. | Reports CSV plus label CSV containing CLEAR condition columns (used to identify positive conditions); evaluation consumes ground-truth feature JSON/CSV. |
 | Prompting | `label/configs/prompts.py` provides the system prompt with five illustrative exemplars covering all conditions and enforced JSON schema. | `feature/configs/prompts.py` generates per-condition prompts; templates adapt to each condition and feature type before inference. |
 | Intermediate output file | Predictions saved to `GEN_DIR/tmp/output_labels_<model>.json`; evaluation metrics written to `GEN_DIR/label_metrics_<model>.csv`. | Feature JSON saved to `GEN_DIR/output_feature_<model>.json`; evaluation exports `results_qa_avg.csv` and `results_ie_avg.csv` in `GEN_DIR`. |
-| Scoring | `processor/eval.py` reports `Pos F1`, `Pos F1_5`, `Pos micro F1`, `Neg F1`, `Neg F1_5`, `Neg micro F1`, plus per-condition positive/negative F1 scores. | QA features (First Occurrence, Change, Severity, Urgency) score `Acc. (micro)`, `Acc. (macro)`, `F1 (micro)`, `F1 (macro)`; IE features (Descriptive Location, Action) score `ROUGE-L`, `BLEU-4`. |
+| Scoring | `processor/eval.py` reports `Pos F1`, `Pos F1_5`, `Pos micro F1`, `Neg F1`, `Neg F1_5`, `Neg micro F1`, plus per-condition positive/negative F1 scores. | QA features (First Occurrence, Change, Severity) score `Acc. (micro)`, `Acc. (macro)`, `F1 (micro)`, `F1 (macro)`; IE features (Descriptive Location, Recommendation) score `o1-mini score`, `ROUGE-L`, `BLEU-4`. |
+
+## Materials
+
+1. We release **CLEAR-Bench**, our adaptable expert evaluation dataset designed for use with the CLEAR evaluator, on [PhysioNet](https://physionet.org/). *(Coming very soon!)*
+
+2. To accelerate open-source model inference, we implement our backend using the **vLLM** architecture. For more details, please refer to the [official vLLM documentation](https://docs.vllm.ai/en/latest/).
+
+3. To address privacy concerns when working with medical data, we follow the guidelines outlined in [Responsible Use of MIMIC Data with Online Services like GPT](https://physionet.org/news/post/gpt-responsible-use). Specifically, we utilize the [Azure OpenAI Service](https://azure.microsoft.com/en-us/products/ai-foundry/models/openai/) to enable secure use of commercial, closed-source models.
 
 
-## Usage
+## Usage Tips
 
 1. Example scripts are available at `./label/run_label.bash` and `./feature/run_feature.bash`. Please use them as templates and adjust the variables to fit your configuration.
 
