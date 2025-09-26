@@ -37,11 +37,9 @@ This is the codebase for an end-to-end evaluator for radiology report evaluation
 
 ## Installation
 
-We recommend using conda for environment management. In the main README, we would only demonstrate how to use CLEAR evaluator. If interested in post-training for a specialized local small-size evaluator, please refer /models for more details.
+In the main README, we would only demonstrate how to use CLEAR evaluator. If interested in post-training for a specialized local small-size evaluator, please refer /models for more details.
 
-
-
-Secondly, please run the following command for setting up environment.
+We recommend using conda for environment management. Please run the following command for setting up environment.
 
 ```bash
 conda env create -f environment.yaml
