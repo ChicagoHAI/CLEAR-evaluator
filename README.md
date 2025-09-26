@@ -1,9 +1,11 @@
 # CLEAR: A Clinically Grounded Tabular Framework for Radiology Report Evaluation
 
-This is the implementation of CLEAR: A Clinically-Grounded Tabular Framework for
-Radiology Report Evaluation. 
+This is the codebase for an end-to-end evaluator for radiology report evaluation based on taxonomy first proposed in [CLEAR](https://arxiv.org/abs/2505.16325) (2025 EMNLP Findings).
 
-## Project Structure
+## CLEAR Framework
+![CLEAR overview](pics/CLEAR_overview.png)
+
+## Codebase Structure
 ```
 .
 ├── environment.yaml
@@ -35,9 +37,9 @@ Radiology Report Evaluation.
 
 ## Installation
 
-We recommend using conda for environment management.
+We recommend using conda for environment management. In the main README, we would only demonstrate how to use CLEAR evaluator. If interested in post-training for a specialized local small-size evaluator, please refer /models for more details.
 
-Firstly, please install LLaMA-Factory as a submodule.
+
 
 Secondly, please run the following command for setting up environment.
 
@@ -48,7 +50,9 @@ pip install -r requirements.txt
 
 ## Component
 
-1. Module 1: Label Extraction Module (5-shot prompting)
+1. Module 1: Label Extraction Module (5-shot prompting) For scroing, we support Pos F1@13, Pos F1@5, Pos F1 micro and Neg F1@13, Neg F1@5, Neg F1 micro.
+
+2. Module 2: Description Extraction Module (Radiologist-Curated Terminology embedded) We support five features
 
 
 ## Usage
@@ -59,7 +63,7 @@ pip install -r requirements.txt
 
 3. skip inference by setting SKIP_INFERENCE=True
 
-4. labeling schema in evaluation and dataset using 0, 1, -1
+4. labeling schema in evaluation and dataset using 0 (negative), 1 (postive), -1 (unclear)
 
 5. ensure your input reports has a column named ['report'] containing both FINDINGS and IMPRESSION
 

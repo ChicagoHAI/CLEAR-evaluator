@@ -1,3 +1,3 @@
-### Load our existing labeler
+# Post-training A Specialized Small-Size Evaluator
 
-### Finetuning your own labeler
+Firstly, please install LLaMA-Factory as a submodule.
