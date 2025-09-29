@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import asyncio
 import json
@@ -22,14 +20,29 @@ FEATURE_INFER = {
 LABEL_EVAL = REPO_ROOT / "label" / "processor" / "eval.py"
 FEATURE_EVAL = REPO_ROOT / "feature" / "processor" / "eval.py"
 POSITIVE_VALUE = 1  # feature pipeline expects 1 for true positives
+CXR_LABEL_COLUMNS = [
+    "Enlarged Cardiomediastinum",
+    "Cardiomegaly",
+    "Lung Opacity",
+    "Lung Lesion",
+    "Edema",
+    "Consolidation",
+    "Pneumonia",
+    "Atelectasis",
+    "Pneumothorax",
+    "Pleural Effusion",
+    "Pleural Other",
+    "Fracture",
+    "Support Devices",
+]
 
 
 @dataclass
 class DatasetSpec:
     tag: str                 # “generated”, “reference”, etc.
     reports: Path            # CSV with columns: study_id, report
-    label_gt: Path | None    # CSV for label evaluation and TP filtering
-    feature_gt: Path | None  # JSON (or CSV) for feature evaluation
+    label_gt: Path | None = None    # CSV for label evaluation and TP filtering
+    feature_gt: Path | None = None  # JSON (or CSV) for feature evaluation
 
 
 async def run_cmd(tag: str, command: list[str]) -> None:
@@ -43,15 +56,16 @@ async def run_cmd(tag: str, command: list[str]) -> None:
 async def run_label_inference(spec: DatasetSpec, backbone: str, model: str, output_root: Path) -> tuple[Path, Path]:
     out_dir = output_root / spec.tag / "labels"
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "tmp").mkdir(exist_ok=True)
 
     cmd = [
         sys.executable,
         str(LABEL_INFER[backbone]),
         "--model_name",
         model,
-        "--input_csv",
+        "--reports",
         str(spec.reports),
-        "--o",
+        "--output",
         str(out_dir),
     ]
     await run_cmd(f"{spec.tag}-label-infer", cmd)
@@ -75,12 +89,53 @@ async def run_label_evaluation(spec: DatasetSpec, out_dir: Path, model: str) -> 
     await run_cmd(f"{spec.tag}-label-eval", cmd)
 
 
-def build_tp_label_csv(gt_csv: Path, pred_json: Path, output_csv: Path) -> Path:
-    df_gt = pd.read_csv(gt_csv).set_index("study_id")
-    df_tp = pd.DataFrame(0, index=df_gt.index, columns=df_gt.columns)
+def normalize_label_value(value: object) -> int:
+    text = str(value).strip().lower()
+    if text in {"1", "positive", "true"}:
+        return 1
+    if text in {"0", "negative", "false"}:
+        return 0
+    if text in {"-1", "unclear", "n/a", "nan"}:
+        return -1
+    return -1
 
+
+def label_json_to_csv(json_path: Path, output_csv: Path) -> Path:
+    with open(json_path, encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    rows: list[dict[str, object]] = []
+    for study_id, conditions in data.items():
+        row = {"study_id": study_id}
+        if isinstance(conditions, str):
+            try:
+                conditions = json.loads(conditions)
+            except json.JSONDecodeError:
+                conditions = {}
+        if not isinstance(conditions, dict):
+            conditions = {}
+        for label in CXR_LABEL_COLUMNS:
+            row[label] = normalize_label_value(conditions.get(label))
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(by="study_id")
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_csv, index=False)
+    return output_csv
+
+
+def prepare_feature_label_csv(
+    gt_csv: Path,
+    pred_json: Path,
+    output_csv: Path,
+) -> Path:
     with open(pred_json, encoding="utf-8") as fh:
         preds = json.load(fh)
+
+    df_gt = pd.read_csv(gt_csv).set_index("study_id")
+    df_tp = pd.DataFrame(0, index=df_gt.index, columns=df_gt.columns)
 
     for study_id, conditions in preds.items():
         if study_id not in df_tp.index:
@@ -105,25 +160,33 @@ async def run_feature_inference(
 ) -> tuple[Path, Path]:
     out_dir = output_root / spec.tag / "features"
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "tmp").mkdir(exist_ok=True)
 
     cmd = [
         sys.executable,
         str(FEATURE_INFER[backbone]),
         "--model",
         model,
-        "--r",
+        "--reports",
         str(spec.reports),
-        "--l",
+        "--labels",
         str(filtered_labels),
-        "--o",
+        "--output",
         str(out_dir),
     ]
     await run_cmd(f"{spec.tag}-feature-infer", cmd)
-    gen_json = out_dir / f"output_feature_{model}.json"
+    gen_json = out_dir / "tmp" / f"output_feature_{model}.json"
     return out_dir, gen_json
 
 
-async def run_feature_evaluation(spec: DatasetSpec, out_dir: Path, gen_json: Path) -> None:
+async def run_feature_evaluation(
+    spec: DatasetSpec,
+    out_dir: Path,
+    gen_json: Path,
+    model: str,
+    enable_llm_metric: bool,
+    scoring_llm: str | None,
+) -> None:
     if spec.feature_gt is None:
         return
     cmd = [
@@ -135,65 +198,83 @@ async def run_feature_evaluation(spec: DatasetSpec, out_dir: Path, gen_json: Pat
         str(spec.feature_gt),
         "--metric_path",
         str(out_dir),
+        "--model_name",
+        model,
     ]
+    if enable_llm_metric:
+        cmd.append("--enable_llm_metric")
+        if scoring_llm:
+            cmd.extend(["--scoring_llm", scoring_llm])
     await run_cmd(f"{spec.tag}-feature-eval", cmd)
 
 
 async def orchestrate(args: argparse.Namespace) -> None:
     output_root = args.output_root.resolve()
-    specs: list[DatasetSpec] = [
-        DatasetSpec("generated", args.gen_reports),
-        DatasetSpec("reference", args.gt_reports)
-    ]
+    specs: list[DatasetSpec] = [DatasetSpec("generated", args.gen_reports.resolve())]
+    if args.gt_reports:
+        specs.append(DatasetSpec("reference", args.gt_reports.resolve()))
 
 
-    # Stage 1: label inference for all datasets
+    # Stage 1: label inference (gt and gen parallelly)
     label_results = await asyncio.gather(
         *(run_label_inference(spec, args.label_backbone, args.label_model, output_root) for spec in specs)
     )
     label_dirs = {spec.tag: result[0] for spec, result in zip(specs, label_results)}
     pred_jsons = {spec.tag: result[1] for spec, result in zip(specs, label_results)}
 
-    # Stage 2: label evaluation (only after all inference completed)
-    await asyncio.gather(
-        *(run_label_evaluation(spec, label_dirs[spec.tag], args.label_model) for spec in specs)
-    )
+    generated_spec = specs[0]
+    reference_spec = next((spec for spec in specs if spec.tag == "reference"), None)
+    if reference_spec is not None and "reference" in pred_jsons:
+        gt_csv_path = label_dirs["reference"] / f"output_labels_{args.label_model}.csv"
+        label_json_to_csv(pred_jsons["reference"], gt_csv_path)
+        generated_spec.label_gt = gt_csv_path
+        reference_spec.label_gt = gt_csv_path
 
-    # Stage 3: build filtered label CSVs for the feature extractor
+    # Stage 2: label evaluation (gt and gen input as a pair)
+    await run_label_evaluation(generated_spec, label_dirs["generated"], args.label_model)
+
+    # Stage 3: build filtered label CSV for only true positive conditions in gt and gen
     filtered_csvs: dict[str, Path] = {}
-    for spec in specs:
-        if spec.label_gt is None:
-            raise ValueError(f"{spec.tag}: label ground truth required to build feature labels.")
-        filtered_csvs[spec.tag] = await asyncio.to_thread(
-            build_tp_label_csv,
-            spec.label_gt,
-            pred_jsons[spec.tag],
-            output_root / spec.tag / "labels_for_features.csv",
+    if generated_spec.label_gt is not None:
+        filtered_csvs["generated"] = await asyncio.to_thread(
+            prepare_feature_label_csv,
+            generated_spec.label_gt,
+            pred_jsons["generated"],
+            output_root / "generated" / f"filtered_tp_labels_{args.label_model}.csv",
         )
 
-    # Stage 4: feature inference for all datasets
-    feature_results = await asyncio.gather(
-        *(
-            run_feature_inference(
-                spec,
-                args.feature_backbone,
-                args.feature_model,
-                filtered_csvs[spec.tag],
-                output_root,
+    # Stage 4: feature inference (gt and gen parallelly)
+    feature_specs = [spec for spec in specs]
+    feature_dirs: dict[str, Path] = {}
+    feature_jsons: dict[str, Path] = {}
+    if feature_specs:
+        feature_results = await asyncio.gather(
+            *(
+                run_feature_inference(
+                    spec,
+                    args.feature_backbone,
+                    args.feature_model,
+                    filtered_csvs["generated"],
+                    output_root,
+                )
+                for spec in feature_specs
             )
-            for spec in specs
         )
-    )
-    feature_dirs = {spec.tag: result[0] for spec, result in zip(specs, feature_results)}
-    feature_jsons = {spec.tag: result[1] for spec, result in zip(specs, feature_results)}
+        feature_dirs = {spec.tag: result[0] for spec, result in zip(feature_specs, feature_results)}
+        feature_jsons = {spec.tag: result[1] for spec, result in zip(feature_specs, feature_results)}
 
-    # Stage 5: feature evaluation
-    await asyncio.gather(
-        *(
-            run_feature_evaluation(spec, feature_dirs[spec.tag], feature_jsons[spec.tag])
-            for spec in specs
+    # Stage 5: feature evaluation (gt and gen input as a pair)
+    if "reference" in feature_jsons:
+        specs[0].feature_gt = feature_jsons["reference"]
+    if "generated" in feature_jsons:
+        await run_feature_evaluation(
+            specs[0],
+            feature_dirs["generated"],
+            feature_jsons["generated"],
+            args.feature_model,
+            args.feature_eval_enable_llm,
+            args.feature_eval_scoring_llm,
         )
-    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -206,12 +287,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--feature-backbone", choices=("azure", "vllm"), default="vllm")
     parser.add_argument("--feature-model", required=True)
     parser.add_argument("--output-root", type=Path, default=REPO_ROOT / "runs", help="Directory to store outputs.")
+    parser.add_argument("--feature-eval-enable-llm", action="store_true", help="Enable LLM-based IE scoring during feature evaluation.")
+    parser.add_argument("--feature-eval-scoring-llm", type=str, help="Model name for LLM-based IE scoring.")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     asyncio.run(orchestrate(args))
+    print('Successfully finished all evaluation!')
 
 
 if __name__ == "__main__":

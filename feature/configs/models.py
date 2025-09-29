@@ -8,11 +8,11 @@ MODEL_CONFIGS = {
         "deployment": "gpt-4o", # Deployment name for Azure API.
         "max_tokens": 4096
     },
-    "gpt-4o-mini": {
+     "gpt-4o-mini": {
         "api_key": "", # API key for Azure API.
         "api_version": "2025-01-01-preview", # Endpoint for Azure API.
         "endpoint": "", # Endpoint for Azure API.
-        "deployment": "gpt-4o", # Deployment name for Azure API.
+        "deployment": "gpt-4o-mini", # Deployment name for Azure API.
         "max_tokens": 4096
     },
     "llama-3.1-8b": {

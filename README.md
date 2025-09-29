@@ -1,84 +1,99 @@
 # CLEAR: A Clinically Grounded Tabular Framework for Radiology Report Evaluation
 
-This is the codebase for an end-to-end evaluator for radiology report evaluation based on taxonomy first proposed in [CLEAR](https://arxiv.org/abs/2505.16325) (2025 EMNLP Findings).
+CLEAR provides an end-to-end evaluator for radiology reports built on the taxonomy introduced in [CLEAR (EMNLP Findings 2025)](https://arxiv.org/abs/2505.16325). The pipeline pairs label-level reasoning with fine-grained feature extraction so you can score generated reports against radiologist-grade annotations.
 
-## CLEAR Framework
 ![CLEAR overview](pics/CLEAR_overview.png)
 
-## Codebase Structure
+## Highlights
+- Covers both condition classification and detailed feature extraction with consistent schema enforcement.
+- Supports open-source (vLLM) and closed-source (Azure OpenAI) backends via declarative model configs.
+- Ships with orchestration scripts that stage inference, evaluation, and intermediate data hand-offs.
+- Produces granular metrics (per-condition F1, QA/IE scores, optional LLM-based scoring) for auditability.
+
+## Repository Layout
 ```
 .
-├── environment.yaml
-├── feature
-│   ├── configs
-│   │   ├── models.py
-│   │   └── prompts.py
-│   ├── processor
-│   │   ├── AzureOpenAI.py
-│   │   ├── eval.py
-│   │   └── vLLM.py
-│   └── run_feature.bash
-├── label
-│   ├── configs
-│   │   ├── models.py
-│   │   └── prompts.py
-│   ├── processor
-│   │   ├── AzureOpenAI.py
-│   │   ├── eval.py
-│   │   └── vLLM.py
-│   └── run_label.bash
-├── models
-│   ├── README.md
-│   └── train
-│       └── LLaMA-Factory
-├── README.md
-└── requirements.txt
+├── environment.yaml           # Conda environment definition
+├── feature/                   # Feature extraction prompts, configs, processors
+├── label/                     # Label extraction prompts, configs, processors
+├── main.py                    # Orchestrates label + feature pipelines end-to-end
+├── models/                    # Instructions for fine-tuning bespoke evaluators
+├── run.bash                   # Convenience wrapper around main.py
+├── data/                      # (User-provided) report and label CSVs
+├── runs/                      # Default output directory created at runtime
+└── README.md
 ```
 
-## Installation
+## Setup
 
-In the main README, we would only demonstrate how to use CLEAR evaluator. If interested in post-training for a specialized local small-size evaluator, please refer `/models` for more details.
+### Prerequisites
+- Linux environment with Python 3.10+ (matching `environment.yaml`).
+- Conda (recommended) or an equivalent virtual environment manager.
+- GPU with CUDA drivers when running vLLM backends.
+- Azure OpenAI subscription when using the Azure processors.
 
-We recommend using conda for environment management. Please run the following command for setting up environment.
-
+### Install
 ```bash
+cd CLEAR-evaluator
 conda env create -f environment.yaml
-pip install -r requirements.txt
+conda activate clear-evaluator
 ```
 
-## Component
+## Data Requirements
+- **Generated reports (`--gen-reports`)**: CSV with at least `study_id` and `report` columns. The `report` field should include both FINDINGS and IMPRESSION sections.
+- **Reference reports (`--gt-reports`, optional)**: CSV with the same schema as generated reports. When supplied, the pipeline will derive ground-truth labels and features from the reference run.
+- **Ground-truth labels**: Expected in CLEAR format using `0` (negative), `1` (positive), `-1` (unclear). When not provided explicitly, the reference run will be converted into a CSV and reused downstream.
+- **Ground-truth features**: JSON/CSV following the templates in `feature/configs/prompts.py`. Place the file alongside your report CSV and point the evaluator to it when invoking the feature evaluation script directly.
 
-The evaluator runs in two sequential modules. The table below captures what each module is responsible for and how to configure it.
+## Configuring Models
+Model definitions live in `label/configs/models.py` and `feature/configs/models.py`.
+- **Azure entries** must include `api_key`, `api_version`, `endpoint`, and `deployment`. Optional fields such as `max_tokens` can be added per deployment.
+- **vLLM entries** must include `model_path`, `temperature`, `max_tokens`, and `tensor_parallel_size`. Ensure the model weights are accessible on disk and compatible with your hardware.
 
-| Aspect | Module 1: Label Extraction | Module 2: Description Extraction |
-| --- | --- | --- |
-| Function | Predicts the 13 CLEAR condition labels (`positive`, `negative`, `unclear`) from full radiology reports using a 5-shot JSON-tagged prompt. | Expands positive findings into structured features (First Occurrence, Change, Severity, Urgency, Descriptive Location, Action/Recommendation) using radiologist-curated templates. |
-| Supported open-source model requirements (vLLM) | `model_path`, `temperature`, `max_tokens`, `tensor_parallel_size` (see `label/configs/models.py`). | `model_path`, `temperature`, `max_tokens`, `tensor_parallel_size` (see `feature/configs/models.py`). |
-| Supported closed-source model requirements (AzureOpenAI) | `api_key`, `api_version`, `endpoint`, `deployment`, optional `max_tokens` (see `label/configs/models.py`). | `api_key`, `api_version`, `endpoint`, `deployment`, optional `max_tokens` (see `feature/configs/models.py`). |
-| Input file | Reports CSV with `study_id` and `report`; evaluation expects ground-truth labels CSV with the 13 CLEAR condition columns. | Reports CSV plus label CSV containing CLEAR condition columns (used to identify positive conditions); evaluation consumes ground-truth feature JSON/CSV. |
-| Prompting | `label/configs/prompts.py` provides the system prompt with five illustrative exemplars covering all conditions and enforced JSON schema. | `feature/configs/prompts.py` generates per-condition prompts; templates adapt to each condition and feature type before inference. |
-| Intermediate output file | Predictions saved to `GEN_DIR/tmp/output_labels_<model>.json`; evaluation metrics written to `GEN_DIR/label_metrics_<model>.csv`. | Feature JSON saved to `GEN_DIR/output_feature_<model>.json`; evaluation exports `results_qa_avg.csv` and `results_ie_avg.csv` in `GEN_DIR`. |
-| Scoring | `processor/eval.py` reports `Pos F1`, `Pos F1_5`, `Pos micro F1`, `Neg F1`, `Neg F1_5`, `Neg micro F1`, plus per-condition positive/negative F1 scores. | QA features (First Occurrence, Change, Severity) score `Acc. (micro)`, `Acc. (macro)`, `F1 (micro)`, `F1 (macro)`; IE features (Descriptive Location, Recommendation) score `o1-mini score`, `ROUGE-L`, `BLEU-4`. |
+Prompts for each stage are defined in the paired `prompts.py` files. You can extend or adjust them to suit new conditions or features.
 
-## Materials
+## Running the Evaluator
+`run.bash` orchestrates the entire pipeline. Open the script and edit the configuration block at the top to point to your data, models, and preferred output directory before running it.
 
-1. We release **CLEAR-Bench**, our adaptable expert evaluation dataset designed for use with the CLEAR evaluator, on [PhysioNet](https://physionet.org/). *(Coming very soon!)*
+Key variables inside `run.bash`:
+- `GEN_REPORTS` / `GT_REPORTS`: CSVs containing generated and (optional) reference reports with `study_id` and `report` columns. Leave `GT_REPORTS` empty if you do not have references.
+- `LABEL_BACKBONE` / `FEATURE_BACKBONE`: choose `azure` or `vllm` for each stage.
+- `LABEL_MODEL` / `FEATURE_MODEL`: model identifiers defined in `label/configs/models.py` and `feature/configs/models.py`.
+- `OUTPUT_ROOT`: directory where the pipeline writes outputs (`runs/<timestamp>` by default).
+- `ENABLE_LLM` and `SCORING_LLM`: toggle the optional LLM-based IE metrics and choose the scoring model.
+- `PYTHON_BIN`: interpreter used to run `main.py` (defaults to the active environment).
 
-2. To accelerate open-source model inference, we implement our backend using the **vLLM** architecture. For more details, please refer to the [official vLLM documentation](https://docs.vllm.ai/en/latest/).
+After updating those values, launch the pipeline with:
+```bash
+bash run.bash
+```
 
-3. To address privacy concerns when working with medical data, we follow the guidelines outlined in [Responsible Use of MIMIC Data with Online Services like GPT](https://physionet.org/news/post/gpt-responsible-use). Specifically, we utilize the [Azure OpenAI Service](https://azure.microsoft.com/en-us/products/ai-foundry/models/openai/) to enable secure use of commercial, closed-source models.
+### Stage Outputs
+Each run builds `runs/<timestamp>/` with the following structure:
+- `generated/labels/tmp/output_labels_<MODEL>.json`: raw label predictions.
+- `generated/output_labels_<MODEL>.csv`: normalized label table used for evaluation.
+- `generated/filtered_tp_labels_<MODEL>.csv`: positive-condition filter passed to the feature stage.
+- `generated/features/tmp/output_feature_<MODEL>.json`: extracted feature set.
+- `generated/features/results_qa_avg_<MODEL>.csv`, `results_ie_avg_<MODEL>.csv`: quantitative metrics per feature type.
+- `generated/label_metrics_<MODEL>.csv`: label evaluation summary.
 
+When a reference dataset is provided, the same sub-directories are created under `reference/` for comparison and for deriving ground-truth annotations.
 
-## Usage Tips
+## Module Scripts
+- `label/run_label.bash` and `feature/run_feature.bash` show minimal examples for invoking processors in isolation.
+- `label/processor/eval.py` reports per-condition positive/negative F1 scores, including `Pos F1`, `Pos F1_5`, `Neg F1`, and micro variants.
+- `feature/processor/eval.py` reports QA metrics (`Acc. micro/macro`, `F1 micro/macro`) plus IE metrics (`o1-mini score`, `ROUGE-L`, `BLEU-4`). Pass `--enable_llm_metric` and `--scoring_llm` to compute the LLM-based IE score.
 
-1. Example scripts are available at `./label/run_label.bash` and `./feature/run_feature.bash`. Please use them as templates and adjust the variables to fit your configuration.
+## Tips & Troubleshooting
+- Ensure vLLM model definitions specify `temperature`, `max_tokens`, and `tensor_parallel_size`; missing fields will trigger runtime errors.
+- When using Azure, double-check that environment keys match your active subscription and that the deployment name aligns with the configured model.
+- Reports must contain a `report` column with combined FINDINGS and IMPRESSION text; missing sections degrade model performance.
+- CLEAR assumes the label schema `{0: negative, 1: positive, -1: unclear}`; normalize upstream data before ingestion to avoid misaligned metrics.
 
-2. model name in bash must exist in configs/model.py
+## Additional Resources
+1. **CLEAR-Bench** (coming soon): our expert evaluation dataset, to be released on [PhysioNet](https://physionet.org/).
+2. **vLLM**: see the [official documentation](https://docs.vllm.ai/en/latest/) for deployment and performance tuning.
+3. **Responsible AI Use**: follow the [Responsible Use of MIMIC Data with Online Services like GPT](https://physionet.org/news/post/gpt-responsible-use) guidelines. We recommend the [Azure OpenAI Service](https://azure.microsoft.com/en-us/products/ai-foundry/models/openai/) for secure commercial model access.
 
-3. skip inference by setting SKIP_INFERENCE=True
-
-4. labeling schema in evaluation and dataset using 0 (negative), 1 (postive), -1 (unclear)
-
-5. ensure your input reports has a column named ['report'] containing both FINDINGS and IMPRESSION
-
-6. make sure the model you pass under the vLLM backbone always have temperature, max_tokens, and tensor_parallel_size features
+## Citation
+If you use CLEAR in academic work, please cite the original CLEAR paper linked above.

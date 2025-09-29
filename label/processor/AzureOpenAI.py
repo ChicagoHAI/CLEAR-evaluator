@@ -128,7 +128,16 @@ class AzureProcessor:
             
             if task1_match:
                 task1_content = task1_match.group(1).strip()
-                task1_results[id] = json.loads(task1_content)
+                # Azure responses often wrap the JSON in Markdown fences; strip them before parsing
+                if task1_content.startswith("```"):
+                    task1_content = re.sub(r"^```(?:[a-zA-Z0-9_+-]+)?\s*", "", task1_content)
+                    task1_content = re.sub(r"\s*```$", "", task1_content)
+
+                try:
+                    task1_results[id] = json.loads(task1_content)
+                except json.JSONDecodeError:
+                    print(f"Warning: Invalid JSON for ID {id}, storing raw content")
+                    task1_results[id] = task1_content
             else:
                 print(f"Warning: No TASK1 match for ID {id}")
                 task1_results[id] = generated_text
