@@ -5,36 +5,47 @@ import pandas as pd
 import numpy as np
 import math
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import argparse
+from typing import Optional, Tuple
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
 from openai import AzureOpenAI
 from tqdm import tqdm
 
+from configs.prompts import LLMMetricPrompts
+from configs.models import MODEL_CONFIGS
+
 # Feature configuration
 FEATURE_CONFIG = {
-    "IE": ['Descriptive Location', "Action"],
-    "QA": ['First Occurrence', 'Change', 'Severity', 'Urgency'],
-    "Support Devices": ['Descriptive Location', 'Urgency', 'Action'],
-    "All": ['First Occurrence', 'Change', 'Severity', 'Descriptive Location', 'Urgency', 'Action']
+    "IE": ['Descriptive Location', "Recommendation"],
+    "QA": ['First Occurrence', 'Change', 'Severity'],
+    "Support Devices": ['Descriptive Location', 'Recommendation'],
+    "All": ['First Occurrence', 'Change', 'Severity', 'Descriptive Location', 'Recommendation']
 }
 
-MODEL_CONFIGS = {
-    "gpt-4o": {
-        "api_key": os.environ.get("AZURE_OPENAI_API_KEY"),
-        "api_version": "2024-02-01",
-        "endpoint": os.environ.get("AZURE_OPENAI_ENDPOINT"),
-        "deployment": "gpt-4o",
-        "max_tokens": 1024
-    },
-    "o1-mini": {
-        "api_key": os.environ.get("AZURE_OPENAI_API_KEY"),
-        "api_version": "2024-02-01",
-        "endpoint": os.environ.get("AZURE_OPENAI_ENDPOINT"),
-        "deployment": "o1-mini",
-        "max_tokens": 1024
-    }
-}
+
+def load_json_file(path: str, description: str) -> dict:
+    """Load a JSON file with a helpful error message if it fails."""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{description} not found at {path}")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        try:
+            return json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Failed to parse {description} at {path}: {exc}") from exc
+
+
+def load_text_file(path: str, description: str) -> str:
+    """Load a UTF-8 text file and return its content."""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{description} not found at {path}")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
 
 
 def extract_and_parse_json(text):
@@ -120,27 +131,36 @@ def convert_feature_df(dict_gt: dict,
     """
     temp_data = []
      
-    for id in dict_gt:
-        assert len(dict_gt[id]) == len(dict_gen[id]), f"{id} has mismatch conditions between gt and gen!"
-        gt_condition = dict_gt[id]
-        gen_condition = dict_gen[id] 
+    for id, gt_condition in dict_gt.items():
+        if id not in dict_gen:
+            raise KeyError(f"Missing generated features for study_id '{id}'")
 
-        for condition in gt_condition:
+        gen_condition = dict_gen[id]
+
+        missing_conditions = set(gt_condition) - set(gen_condition)
+        extra_conditions = set(gen_condition) - set(gt_condition)
+        if missing_conditions or extra_conditions:
+            raise ValueError(
+                f"Condition mismatch for study_id '{id}'. Missing in generated: {sorted(missing_conditions)}; "
+                f"unexpected in generated: {sorted(extra_conditions)}"
+            )
+
+        for condition, gt_feature_dict in gt_condition.items():
             if condition == 'Support Devices' and name not in FEATURE_CONFIG["Support Devices"]:
                 continue
 
-            gt_answer = gt_condition[condition][name]
-            gen_answer = gen_condition[condition][name]
+            if condition not in gen_condition:
+                raise KeyError(f"Generated features missing condition '{condition}' for study_id '{id}'")
 
-            # # load feature into list
-            # try:
-            #     gt_feature = json.loads(gt_answer)
-            # except json.JSONDecodeError:
-            #     gt_feature = json.loads(gt_answer.replace("[", '["').replace("]", '"]'))
-            # try:
-            #     gen_feature = json.loads(gen_answer)
-            # except json.JSONDecodeError:
-            #     gen_feature = json.loads(gen_answer.replace("[", '["').replace("]", '"]')) # fix case like: [current]
+            gen_feature_dict = gen_condition[condition]
+
+            if name not in gt_feature_dict:
+                raise KeyError(f"Ground truth missing feature '{name}' for condition '{condition}' and study_id '{id}'")
+            if name not in gen_feature_dict:
+                raise KeyError(f"Generated output missing feature '{name}' for condition '{condition}' and study_id '{id}'")
+
+            gt_answer = gt_feature_dict[name]
+            gen_answer = gen_feature_dict[name]
 
             # Use the improved JSON extraction function
             gt_feature = extract_and_parse_json(gt_answer)
@@ -153,11 +173,11 @@ def convert_feature_df(dict_gt: dict,
                 assert len(gt_feature) == 1, f"gt {id} {condition} {name} exists one more answer"
                 assert len(gen_feature) == 1, f"gen {id} {condition} {name} exists one more answer"
                 # list to str
-                gt_content = gt_feature[0].lower()
-                gen_content = gen_feature[0].lower()
+                gt_content = str(gt_feature[0]).lower()
+                gen_content = str(gen_feature[0]).lower()
             elif mode == 'IE':
-                gt_content = [x.lower() for x in gt_feature]
-                gen_content = [x.lower() for x in gen_feature]             
+                gt_content = [str(x).lower() for x in gt_feature]
+                gen_content = [str(x).lower() for x in gen_feature]             
 
             temp_data.append({
                 "study_id": id,
@@ -170,7 +190,23 @@ def convert_feature_df(dict_gt: dict,
     return df_feature
 
 
-def get_one_response(usr_prompt, sys_prompt, model_name="o1-mini"):
+def clamp_score(value: float) -> float:
+    """Clamp a floating point value into the [0, 1] interval."""
+    return max(0.0, min(1.0, value))
+
+
+def interpret_llm_score(response: str) -> Optional[float]:
+    """Attempt to coerce an LLM response into a numeric score between 0 and 1."""
+    if not response:
+        return None
+
+    score_tag_match = re.search(r'</?SCORE>\s*"?(-?\d+(?:\.\d+)?)"?\s*</SCORE>', response, re.IGNORECASE)
+    if score_tag_match:
+        value = float(score_tag_match.group(1))
+        return clamp_score(value)
+
+
+def get_one_response(usr_prompt, sys_prompt, model_name="gpt-4o-mini"):
     """
     Get a response from Azure OpenAI API
     
@@ -188,15 +224,17 @@ def get_one_response(usr_prompt, sys_prompt, model_name="o1-mini"):
     config = MODEL_CONFIGS[model_name]
     
     client = AzureOpenAI(
-        api_key=config["api_key"],  
+        api_key=config["api_key"],
         api_version=config["api_version"],
-        base_url=f"{config['endpoint']}/openai/deployments/{config['deployment']}"
+        azure_endpoint=config["endpoint"]
     )
 
+    max_tokens = config.get("max_tokens")
+
     try:
-        apiresponse = client.chat.completions.with_raw_response.create(
-            model=config["deployment"],
-            messages=[
+        request_payload = {
+            "model": config["deployment"],
+            "messages": [
                 {
                     "role": "system", 
                     "content": sys_prompt
@@ -205,109 +243,31 @@ def get_one_response(usr_prompt, sys_prompt, model_name="o1-mini"):
                     "role": "user",
                     "content": usr_prompt
                 }
-            ],
-            max_tokens=config["max_tokens"]
-        )
+            ]
+        }
+        if max_tokens is not None:
+            request_payload["max_tokens"] = max_tokens
+
+        apiresponse = client.chat.completions.with_raw_response.create(**request_payload)
     except:
-        apiresponse = client.chat.completions.with_raw_response.create(
-            model=config["deployment"],
-            messages=[
+        fallback_payload = {
+            "model": config["deployment"],
+            "messages": [
                 {
                     "role": "user",
                     "content": sys_prompt + "\n\n" + usr_prompt
                 }
             ]
-        )
+        }
+        if max_tokens is not None:
+            fallback_payload["max_tokens"] = max_tokens
+
+        apiresponse = client.chat.completions.with_raw_response.create(**fallback_payload)
 
     chat_completion = apiresponse.parse()
     response = chat_completion.choices[0].message.content
     
     return response
-
-
-
-def compare_model_outputs(gt_path, model_paths, output_dir, feature_types=None, model_names=None, prompt_paths=None, model_name="o1-mini"):
-    """
-    Compare different model outputs against ground truth using AI scoring
-    
-    Args:
-        gt_path: Path to ground truth JSON file
-        model_paths: List of paths to model output JSON files
-        output_dir: Directory for output files
-        feature_types: Feature types to evaluate, defaults to IE
-        model_names: List of model names for output labeling
-        prompt_paths: Dictionary with paths to prompt templates
-        model_name: Name of model to use for scoring
-    """
-    print("Comparing model outputs...")
-    
-    # Handle defaults
-    if feature_types is None:
-        feature_types = ["IE"]
-    if model_names is None:
-        model_names = [f"model_{i+1}" for i in range(len(model_paths))]
-    if prompt_paths is None:
-        prompt_paths = {
-            "user": "./usr_prompt.txt",
-            "system": "./sys_prompt.txt"
-        }
-    
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Load ground truth data
-    print(f"Loading ground truth from: {gt_path}")
-    with open(gt_path, 'r') as f:
-        gt_dict = json.load(f)
-    gt_dict = dict(sorted(gt_dict.items()))
-    
-    # Load model outputs
-    model_dicts = []
-    for i, path in enumerate(model_paths):
-        print(f"Loading {model_names[i]} output from: {path}")
-        with open(path, 'r') as f:
-            model_dict = json.load(f)
-        model_dict = dict(sorted(model_dict.items()))
-        # Verify key matching
-        assert list(gt_dict.keys()) == list(model_dict.keys()), f"{model_names[i]} keys don't match ground truth."
-        model_dicts.append(model_dict)
-    
-    # Load prompt templates
-    with open(prompt_paths["user"], 'r') as f:
-        usr_prompt_template = f.read()
-    with open(prompt_paths["system"], 'r') as f:
-        sys_prompt = f.read()
-    
-    # Evaluate each feature type
-    for feature_type in feature_types:
-        for feature_name in FEATURE_CONFIG[feature_type]:
-            print(f"Processing feature: {feature_name}")
-            
-            # Compare each model
-            for i, model_dict in enumerate(model_dicts):
-                df = convert_feature_df(gt_dict, model_dict, feature_name, feature_type)
-                
-                # Use AI model for scoring
-                print(f"Scoring {model_names[i]}'s {feature_name} feature with {model_name}...")
-                for j in tqdm(range(len(df))):
-                    gt_feature = df['gt_feature'][j]
-                    gen_feature = df['gen_feature'][j]
-                    
-                    # Format prompt
-                    formatted_usr_prompt = usr_prompt_template.format(gt_feature, gen_feature)
-                    
-                    # Get AI score
-                    response = get_one_response(formatted_usr_prompt, sys_prompt, model_name)
-                    df.at[j, 'ai_evaluation'] = response
-                
-                # Save results
-                output_file = os.path.join(output_dir, f"{model_names[i]}_{feature_name}_evaluation.csv")
-                df.to_csv(output_file, index=False)
-                print(f"Evaluation results saved to: {output_file}")
-    
-    print("Model output comparison complete.")
-
-
 
 
 def compute_acc_mirco(gt: pd.Series, gen: pd.Series) -> float:
@@ -337,57 +297,6 @@ def compute_acc_macro(df: pd.DataFrame) -> float:
 
     return round(sum(scores) / len(scores), 3) if scores else float("nan")
 
-def compute_f1_micro(df: pd.DataFrame, name: str) -> float:
-    '''
-    F1 across all reports
-    '''
-    grouped_df = df.groupby('study_id')
-    scores = []
-
-    for id, temp_df in grouped_df:
-        gt_set = set(list(zip(temp_df['condition'], temp_df['gt_feature'])))
-        gen_set = set(list(zip(temp_df['condition'], temp_df['gen_feature'])))
-
-        assert len(gt_set) == len(gen_set), f"{id} {name} exists repetitive coniditons in gt/gen input"        
-
-        tp = len(gt_set & gen_set)
-        fp = len(gen_set - gt_set)
-        fn = len(gt_set - gen_set)
-
-        precision = tp / (tp + fp) if (tp + fp) else 0.0
-        recall = tp / (tp + fn) if (tp + fn) else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-        scores.append(f1)
-
-    return round(sum(scores) / len(scores), 3) if scores else float("nan")
-
-def compute_f1_macro(df: pd.DataFrame, name: str) -> float:
-    '''
-    Macro-averaged F1 across all conditions
-    '''
-    conditions = df['condition'].unique()
-    scores = []
-
-    for condition in conditions:
-        condition_df = df[df['condition'] == condition]
-        grouped_df = condition_df.groupby('study_id')
-        for id, temp_df in grouped_df:
-            gt_set = set(list(zip(temp_df['condition'], temp_df['gt_feature'])))
-            gen_set = set(list(zip(temp_df['condition'], temp_df['gen_feature'])))
-
-            assert len(gt_set) == len(gen_set), f"{condition} {name} exists repetitive conditions in gt/gen input"
-
-            tp = len(gt_set & gen_set)
-            fp = len(gen_set - gt_set)
-            fn = len(gt_set - gen_set)
-
-            precision = tp / (tp + fp) if (tp + fp) else 0.0
-            recall = tp / (tp + fn) if (tp + fn) else 0.0
-            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-            scores.append(f1)
-
-    return round(sum(scores) / len(scores), 3) if scores else float("nan")
-
 def preprocess(text: str):
     text = text.lower()
     text = re.sub(r"[^\w\s]", "", text)
@@ -409,10 +318,98 @@ def rouge_l_score(gt, gen):
     rouge = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
     return rouge.score(gt_text, gen_text)['rougeL'].fmeasure
 
-def compute_similarity(gt_series, gen_series, metric='rouge'):
+
+def compute_llm_metric(
+    gt_series: pd.Series,
+    gen_series: pd.Series,
+    llm_config: dict,
+    return_details: bool = False,
+    context: Optional[pd.DataFrame] = None
+) -> Tuple[float, Optional[pd.DataFrame]]:
+    """Leverage an LLM to score generated features against ground truth.
+
+    Returns an average score between 0 and 1 (NaN if none could be parsed) and
+    optionally a DataFrame capturing per-sample responses.
+    """
+    total = len(gt_series)
+    if total != len(gen_series):
+        raise ValueError("LLM scoring requires gt_series and gen_series to have equal length")
+
+    show_progress = llm_config.get('show_progress', False)
+    index_iterable = range(total)
+    if show_progress:
+        index_iterable = tqdm(index_iterable, desc="LLM scoring", leave=False)
+
+    numeric_scores = []
+    detail_rows = [] if return_details else None
+
+    for idx in index_iterable:
+        gt_list = gt_series.iloc[idx]
+        gen_list = gen_series.iloc[idx]
+
+        gt_text = json.dumps(gt_list, ensure_ascii=False)
+        gen_text = json.dumps(gen_list, ensure_ascii=False)
+
+        usr_template = llm_config['usr_prompt']
+        formatted_usr_prompt = usr_template.format(groundtruth=gt_text, candidate=gen_text)
+        response = get_one_response(formatted_usr_prompt, llm_config['sys_prompt'], llm_config['model_name'])
+        numeric = interpret_llm_score(response)
+
+        if numeric is not None:
+            numeric_scores.append(numeric)
+
+        if return_details:
+            context_data = {}
+            if context is not None:
+                if hasattr(context, 'iloc'):
+                    context_row = context.iloc[idx]
+                    if hasattr(context_row, 'to_dict'):
+                        context_data = context_row.to_dict()
+                elif isinstance(context, list):
+                    context_data = context[idx]
+
+            detail_rows.append({
+                **context_data,
+                'gt_feature': gt_list,
+                'gen_feature': gen_list,
+                'llm_response': response,
+                'llm_score': numeric
+            })
+
+    mean_score = round(float(np.mean(numeric_scores)), 3) if numeric_scores else float('nan')
+
+    if return_details:
+        return mean_score, pd.DataFrame(detail_rows)
+
+    return mean_score, None
+
+
+def compute_similarity(
+    gt_series,
+    gen_series,
+    metric: str = 'rouge',
+    llm_config: Optional[dict] = None,
+    return_details: bool = False,
+    context: Optional[pd.DataFrame] = None
+):
     '''
-    Optimal matching: for each GT, find best Gen phrase
+    Compute similarity metrics between ground truth and generated feature lists.
+    
+    Supports traditional lexical metrics (ROUGE-L, BLEU-4) as well as optional
+    LLM-judged scoring when ``metric`` is set to ``'llm'``.
     '''
+    if metric == 'llm':
+        if llm_config is None:
+            raise ValueError("LLM similarity scoring requires an llm_config")
+        score, details = compute_llm_metric(
+            gt_series=gt_series,
+            gen_series=gen_series,
+            llm_config=llm_config,
+            return_details=return_details,
+            context=context
+        )
+        return (score, details) if return_details else score
+
     all_scores = []
     for gt_list, gen_list in zip(gt_series, gen_series):
         scores = []
@@ -437,9 +434,9 @@ def compute_similarity(gt_series, gen_series, metric='rouge'):
             scores.append(best_score)
         all_scores.append(np.mean(scores))
 
-    return round(np.mean(all_scores), 3)
+    return round(np.mean(all_scores), 3) if all_scores else float('nan')
 
-def cal_metrics(df_feature, name, mode):
+def cal_metrics(df_feature, name, mode, llm_config: Optional[dict] = None, skip_llm: bool = False):
     '''
     Calculate appropriate metrics based on feature mode (QA or IE)
     '''
@@ -450,20 +447,14 @@ def cal_metrics(df_feature, name, mode):
         # 2. Acc. (macro)
         acc_macro = compute_acc_macro(df_feature)
 
-        # 3. F1 (micro)
-        f1_micro = compute_f1_micro(df_feature, name)
-
-        # 4. F1 (macro)
-        f1_macro = compute_f1_macro(df_feature, name)
-
         metric_dict = {
             'Feature': name,
             'Acc. (micro)': acc_micro,
-            'Acc. (macro)': acc_macro,
-            'F1 (micro)': f1_micro,
-            'F1 (macro)': f1_macro            
+            'Acc. (macro)': acc_macro       
         }
-    elif mode == 'IE':
+        return metric_dict, None
+
+    if mode == 'IE':
         # 1. ROUGE-L
         rouge = compute_similarity(df_feature['gt_feature'], df_feature['gen_feature'], metric='rouge')
 
@@ -475,10 +466,28 @@ def cal_metrics(df_feature, name, mode):
             'ROUGE-L': rouge,
             'BLEU-4': bleu
         }
-        
-    return metric_dict
+        llm_details = None
+        if llm_config and not skip_llm:
+            llm_score, llm_details = compute_similarity(
+                df_feature['gt_feature'],
+                df_feature['gen_feature'],
+                metric='llm',
+                llm_config=llm_config,
+                return_details=True,
+                context=df_feature[['study_id', 'condition']]
+            )
+            metric_dict['LLM Score'] = llm_score
 
-def evaluate_qa_features(dict_gt, dict_gen, metric_pth):
+        return metric_dict, llm_details
+
+    raise ValueError(f"Unsupported mode '{mode}' for metric calculation")
+
+def evaluate_qa_features(
+    dict_gt,
+    dict_gen,
+    metric_pth,
+    model_name: Optional[str] = None
+):
     '''
     Evaluate QA-type features
     '''
@@ -492,19 +501,28 @@ def evaluate_qa_features(dict_gt, dict_gen, metric_pth):
         df_feature = convert_feature_df(dict_gt, dict_gen, name, mode)
 
         # 2. calculate metrics
-        metric_dict = cal_metrics(df_feature, name, mode)
+        metric_dict, _ = cal_metrics(df_feature, name, mode)
 
         # 3. output metric
         metric_data.append(metric_dict)
 
     metric_df = pd.DataFrame(metric_data)
     os.makedirs(metric_pth, exist_ok=True)
-    output_file = os.path.join(metric_pth, 'results_qa_avg.csv')
+    output_filename = f'results_qa_avg_{model_name}.csv'
+
+    output_file = os.path.join(metric_pth, output_filename)
     metric_df.to_csv(output_file, index=False)
     print(f"QA evaluation results saved to {output_file}")
     return metric_df
 
-def evaluate_ie_features(dict_gt, dict_gen, metric_pth):
+def evaluate_ie_features(
+    dict_gt,
+    dict_gen,
+    metric_pth,
+    model_name: Optional[str] = None,
+    llm_config: Optional[dict] = None,
+    skip_llm: bool = False
+):
     '''
     Evaluate IE-type features
     '''
@@ -518,14 +536,30 @@ def evaluate_ie_features(dict_gt, dict_gen, metric_pth):
         df_feature = convert_feature_df(dict_gt, dict_gen, name, mode)
 
         # 2. calculate metrics
-        metric_dict = cal_metrics(df_feature, name, mode)
+        metric_dict, llm_details = cal_metrics(
+            df_feature,
+            name,
+            mode,
+            llm_config=llm_config,
+            skip_llm=skip_llm
+        )
 
         # 3. output metric
         metric_data.append(metric_dict)
 
+        # 4. detailed llm eval output
+        if llm_details is not None and not llm_details.empty:
+            os.makedirs(metric_pth, exist_ok=True)
+            slug = name.lower().replace(' ', '_')
+            llm_filename = f'ie_llm_evaluation_{slug}_{model_name}.csv'
+            llm_output_file = os.path.join(metric_pth, llm_filename)
+            llm_details.to_csv(llm_output_file, index=False)
+            print(f"LLM evaluation details saved to {llm_output_file}")
+
     metric_df = pd.DataFrame(metric_data)
     os.makedirs(metric_pth, exist_ok=True)
-    output_file = os.path.join(metric_pth, 'results_ie_avg.csv')
+    output_filename = f'results_ie_avg_{model_name}.csv'
+    output_file = os.path.join(metric_pth, output_filename)
     metric_df.to_csv(output_file, index=False)
     print(f"IE evaluation results saved to {output_file}")
     return metric_df
@@ -536,69 +570,67 @@ def main():
                         help='Path to generated feature output JSON file')
     parser.add_argument('--gt_path', type=str, required=True, 
                         help='Path to ground truth feature JSON file')
-    parser.add_argument('--metric_path', type=str, required=True, 
-                        help='Directory to save metric results', default='./metrics')
+    parser.add_argument('--metric_path', type=str, default='./metrics',
+                        help='Directory to save metric results')
+    parser.add_argument('--enable_llm_metric', action='store_true',
+                        help='Include LLM-based scoring as an additional IE metric')
+    parser.add_argument('--model_name', type=str, default=None,
+                        help='Identifier for the model that produced the generated features')
 
     # New command line arguments for model comparison
-    parser.add_argument('--compare_models', action='store_true',
-                        help='Enable model comparison functionality')
-    parser.add_argument('--model_paths', nargs='+', type=str,
-                        help='Multiple model output paths to compare')
-    parser.add_argument('--model_names', nargs='+', type=str,
-                        help='Model names for output file naming')
-    parser.add_argument('--feature_types', nargs='+', type=str, default=['IE'],
-                        help='List of feature types to evaluate')
-    parser.add_argument('--usr_prompt', type=str,
-                        help='Path to user prompt template')
-    parser.add_argument('--sys_prompt', type=str,
-                        help='Path to system prompt template')
-    parser.add_argument('--scoring_model', type=str, default='o1-mini',
+    parser.add_argument('--scoring_llm', type=str, default='gpt-4o-mini',
                         help='Model name to use for scoring')                        
     
     args = parser.parse_args()
-    
-    if args.compare_models:
-        # If model comparison is enabled
-        if not args.model_paths:
-            parser.error("--compare_models requires --model_paths")
-        
-        prompt_paths = {
-            "user": args.usr_prompt if args.usr_prompt else "./usr_prompt.txt",
-            "system": args.sys_prompt if args.sys_prompt else "./sys_prompt.txt"
+
+    llm_config = None
+
+    if args.enable_llm_metric:
+        if args.scoring_llm not in MODEL_CONFIGS:
+            raise ValueError(f"Scoring model '{args.scoring_llm}' not found in MODEL_CONFIGS.")
+
+        usr_prompt_template = LLMMetricPrompts.USER_PROMPT_TEMPLATE
+        sys_prompt_template = LLMMetricPrompts.SYSTEM_PROMPT
+
+
+        llm_config = {
+            "usr_prompt": usr_prompt_template,
+            "sys_prompt": sys_prompt_template,
+            "model_name": args.scoring_llm,
+            "show_progress": True,
         }
-        
-        compare_model_outputs(
-            gt_path=args.gt_path,
-            model_paths=args.model_paths,
-            output_dir=args.metric_path,
-            feature_types=args.feature_types,
-            model_names=args.model_names,
-            prompt_paths=prompt_paths,
-            model_name=args.scoring_model
-        )
-    else:
-        # Original evaluation functionality
-        # Load input files
-        print(f"Loading ground truth from {args.gt_path}...")
-        with open(args.gt_path) as f:
-            dict_gt = json.load(f)
-            
-        print(f"Loading generated features from {args.gen_path}...")
-        with open(args.gen_path) as f:
-            dict_gen = json.load(f)
-        
-        assert len(dict_gt) == len(dict_gen), "Length of ground truth and generated features mismatch!"
-        
-        # Evaluate features
-        qa_results = evaluate_qa_features(dict_gt, dict_gen, args.metric_path)
-        ie_results = evaluate_ie_features(dict_gt, dict_gen, args.metric_path)
-        
-        # Print summary results
-        print("\nQA Evaluation Summary:")
-        print(qa_results)
-        
-        print("\nIE Evaluation Summary:")
-        print(ie_results)
+
+    # Original evaluation functionality
+    # Load input files
+    print(f"Loading ground truth from {args.gt_path}...")
+    dict_gt = load_json_file(args.gt_path, "ground truth data")
+
+    print(f"Loading generated features from {args.gen_path}...")
+    dict_gen = load_json_file(args.gen_path, "generated features")
+    
+    assert len(dict_gt) == len(dict_gen), "Length of ground truth and generated features mismatch!"
+    
+    # Evaluate features
+    qa_results = evaluate_qa_features(
+        dict_gt,
+        dict_gen,
+        args.metric_path,
+        model_name=args.model_name
+    )
+    ie_results = evaluate_ie_features(
+        dict_gt,
+        dict_gen,
+        args.metric_path,
+        model_name=args.model_name,
+        llm_config=llm_config
+    )
+
+    # Print summary results
+    print("\nQA Evaluation Summary:")
+    print(qa_results)
+    
+    print("\nIE Evaluation Summary:")
+    print(ie_results)
 
 if __name__ == "__main__":
     main()

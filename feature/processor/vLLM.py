@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -17,13 +20,13 @@ def parse_args():
     parser.add_argument("--model", type=str, dest='model_name', 
                         default=None, 
                         help="Model name to select from MODEL_CONFIGS.") ### TO-DO: set gpt-4o-mini as default
-    parser.add_argument("--r", type=str, 
+    parser.add_argument("--reports", type=str, 
                         dest="input_reports", default=None, 
                         help="Directory path to input text reports.") ### TO-DO: set gt report as default
-    parser.add_argument("--l", type=str, 
+    parser.add_argument("--labels", type=str, 
                         dest="input_labels", default=None, 
                         help="Directory path to input condition labels.") ### TO-DO: set gt labels as default
-    parser.add_argument("--o", type=str, 
+    parser.add_argument("--output", type=str, 
                         dest='output_dir', default=None, 
                         help="Directory path to output csv(s).")
     args = parser.parse_known_args()
@@ -72,7 +75,7 @@ class vLLMProcessor:
         return response
 
     def get_positive_conditions(self, labels):
-        return labels[labels == 3].index.tolist() # positive: 3 # positive condition list for each study
+        return labels[labels == 1].index.tolist() # positive: 1 # positive condition list for each study
 
 
     def run_feature_extraction(self, report, labels):
@@ -110,7 +113,7 @@ class vLLMProcessor:
             output_dict[id] = self.run_feature_extraction(report, label_row)
 
         # Step 3: Save json
-        output_path = os.path.join(self.out_dir, f"output_feature_{self.model}.json")
+        output_path = os.path.join(self.out_dir, f"tmp/output_feature_{self.model}.json")
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(output_dict, f, ensure_ascii=False, indent=4)
         print(f"Saved output to {output_path}")

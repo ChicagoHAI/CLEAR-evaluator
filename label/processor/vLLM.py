@@ -18,10 +18,10 @@ def parse_args():
     parser.add_argument("--model_name", type=str, dest='model_name',
                         default=None,
                         help="Model name to select from MODEL_CONFIGS.")
-    parser.add_argument("--input_csv", type=str, 
+    parser.add_argument("--reports", type=str, 
                         dest="input_csv", default=None, 
                         help="Path to input CSV file containing reports.")
-    parser.add_argument("--o", type=str, 
+    parser.add_argument("--output", type=str, 
                         dest='output_dir', default=None, 
                         help="Directory path to output results.")
     args = parser.parse_known_args()

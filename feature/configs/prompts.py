@@ -97,7 +97,7 @@ class PromptDict:
 
             for feature, template in cls.feature_template_dict.items():
                 # special cases
-                if condition == "Support Devices" and feature not in ["Urgency", "Descriptive Location", "Action"]:
+                if condition == "Support Devices" and feature not in ["Descriptive Location", "Recommendation"]:
                     continue   
                 
                 # fill in the template
@@ -112,3 +112,27 @@ class PromptDict:
             cls.ALL_PROMPT_DICT[condition] = temp_prompt_dict
 
         return cls.ALL_PROMPT_DICT
+
+
+class LLMMetricPrompts:
+    SYSTEM_PROMPT = (
+        "System Instruction:\n"
+        "You are a radiology report comparison assistant. You will be given two lists of findings: one is the ground truth (GT), and the other is a candidate prediction (GEN).\n"
+        "Your task is to compare them and return a similarity score between 0 and 1.\n"
+        "1. A score of 1.0 means they are clinically and semantically identical.\n"
+        "2. A score of 0.0 means they are completely different or unrelated.\n"
+        "3. Partial matches should get a score in between.\n"
+        "Do not explain the score. Just output a float between 0 and 1.\n"
+        "Example answer: </SCORE>\"0.8\"</SCORE>"
+    )
+
+    USER_PROMPT_TEMPLATE = (
+        "User Input:\n"
+        "GT: {groundtruth}\n"
+        "GEN: {candidate}"
+    )
+
+    @classmethod
+    def format_user_prompt(cls, groundtruth: str, candidate: str) -> str:
+        """Render the user prompt for LLM-based scoring."""
+        return cls.USER_PROMPT_TEMPLATE.format(groundtruth=groundtruth, candidate=candidate)

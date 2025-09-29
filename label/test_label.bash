@@ -22,14 +22,14 @@ if [ "$SKIP_INFERENCE" != "true" ]; then
     echo "Using Azure backbone."
     python ./processor/AzureOpenAI.py \
       --model_name $MODEL \
-      --input_csv "$INPUT_REPORTS" \
-      --o "$GEN_DIR"
+      --reports "$INPUT_REPORTS" \
+      --output "$GEN_DIR"
   elif [ "$BACKBONE" == "vllm" ]; then
     echo "Using vLLM backbone."
     python ./processor/vLLM.py \
       --model_name $MODEL \
-      --input_csv "$INPUT_REPORTS" \
-      --o "$GEN_DIR"
+      --reports "$INPUT_REPORTS" \
+      --output "$GEN_DIR"
   else
     echo "Unsupported backbone: $BACKBONE"
     exit 1
