@@ -10,6 +10,11 @@ CLEAR provides an end-to-end evaluator for radiology reports built on the taxono
 - Ships with orchestration scripts that stage inference, evaluation, and intermediate data hand-offs.
 - Produces granular metrics (per-condition F1, QA/IE scores, optional LLM-based scoring) for auditability.
 
+## Additional Resources
+1. **CLEAR-Bench** (coming soon): our expert evaluation dataset, to be released on [PhysioNet](https://physionet.org/).
+2. **vLLM**: see the [official documentation](https://docs.vllm.ai/en/latest/) for deployment and performance tuning.
+3. **Responsible AI Use**: follow the [Responsible Use of MIMIC Data with Online Services like GPT](https://physionet.org/news/post/gpt-responsible-use) guidelines. We recommend the [Azure OpenAI Service](https://azure.microsoft.com/en-us/products/ai-foundry/models/openai/) for secure commercial model access.
+
 ## Repository Layout
 ```
 .
@@ -42,8 +47,6 @@ conda activate clear-evaluator
 ## Data Requirements
 - **Generated reports (`--gen-reports`)**: CSV with at least `study_id` and `report` columns. The `report` field should include both FINDINGS and IMPRESSION sections.
 - **Reference reports (`--gt-reports`, optional)**: CSV with the same schema as generated reports. When supplied, the pipeline will derive ground-truth labels and features from the reference run.
-- **Ground-truth labels**: Expected in CLEAR format using `0` (negative), `1` (positive), `-1` (unclear). When not provided explicitly, the reference run will be converted into a CSV and reused downstream.
-- **Ground-truth features**: JSON/CSV following the templates in `feature/configs/prompts.py`. Place the file alongside your report CSV and point the evaluator to it when invoking the feature evaluation script directly.
 
 ## Configuring Models
 Model definitions live in `label/configs/models.py` and `feature/configs/models.py`.
@@ -89,11 +92,6 @@ When a reference dataset is provided, the same sub-directories are created under
 - When using Azure, double-check that environment keys match your active subscription and that the deployment name aligns with the configured model.
 - Reports must contain a `report` column with combined FINDINGS and IMPRESSION text; missing sections degrade model performance.
 - CLEAR assumes the label schema `{0: negative, 1: positive, -1: unclear}`; normalize upstream data before ingestion to avoid misaligned metrics.
-
-## Additional Resources
-1. **CLEAR-Bench** (coming soon): our expert evaluation dataset, to be released on [PhysioNet](https://physionet.org/).
-2. **vLLM**: see the [official documentation](https://docs.vllm.ai/en/latest/) for deployment and performance tuning.
-3. **Responsible AI Use**: follow the [Responsible Use of MIMIC Data with Online Services like GPT](https://physionet.org/news/post/gpt-responsible-use) guidelines. We recommend the [Azure OpenAI Service](https://azure.microsoft.com/en-us/products/ai-foundry/models/openai/) for secure commercial model access.
 
 ## Citation
 If you use CLEAR in academic work, please cite the original CLEAR paper linked above.
